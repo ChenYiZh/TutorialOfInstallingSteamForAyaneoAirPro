@@ -130,6 +130,7 @@ Session=plasma.desktop
 
 从 [Steam 官网](https://store.steampowered.com/about/) 下载 `.deb` 安装包，然后使用以下命令安装：
 ```
+sudo dpkg --add-architecture i386 && sudo apt update
 sudo dpkg -i steam_latest.deb
 sudo apt-get install -f  # 修复依赖关系
 ```
