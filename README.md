@@ -142,7 +142,12 @@ sudo apt-get install -f  # 修复依赖关系
 #### 模式一：Openbox 专用会话（推荐）
 此模式创建一个独立的轻量级会话，完全脱离 KDE，资源占用最低，体验最接近游戏机。
 
-**第一步：编写自定义会话启动脚本**
+**第一步：安装 Openbox 窗口管理器**
+```
+sudo apt install openbox
+```
+
+**第二步：编写自定义会话启动脚本**
 ```
 sudo nano /usr/local/bin/steam-session
 ```
@@ -262,7 +267,7 @@ exit 0
 sudo chmod +x /usr/local/bin/steam-session
 ```
 
-**第二步：为 SDDM 创建自定义会话文件**
+**第三步：为 SDDM 创建自定义会话文件**
 ```
 sudo nano /usr/share/xsessions/steam-session.desktop
 ```
@@ -424,6 +429,30 @@ X-KDE-autostart-after=plasma-core
 Terminal=false
 StartupNotify=false
 ```
+
+## 七、笔记
+### 1. 解决 KDE 下 Chromium 系浏览器中文输入法问题
+
+在 KDE Plasma 桌面环境下，Chromium、Chrome、Edge 等浏览器默认可能无法使用中文输入法。通过创建全局配置文件可一劳永逸地解决此问题。
+
+#### 解决方案：创建浏览器启动参数配置文件
+
+1.  **创建配置文件**：
+    ```
+    nano ~/.config/chromium-flags.conf
+    ```
+
+2.  **写入以下参数**（每行一个）：
+    ```
+    --enable-features=UseOzonePlatform
+    --ozone-platform=wayland
+    --enable-wayland-ime
+    ```
+
+保存并退出。此后，所有基于 Chromium 的浏览器在启动时将自动应用这些参数，无需再单独修改每个浏览器的桌面启动器。
+
+---
+
 这个小技巧会在桌面启动后快速执行一个显示器的睡眠唤醒循环，强制刷新屏幕显示，有效解决因驱动或硬件兼容性问题导致的黑屏。
 
 ---
