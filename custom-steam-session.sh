@@ -40,115 +40,54 @@ detect_external_display() {
     echo ""
 }
 
-# 新增功能1：创建Openbox配置文件，将电源键改为睡眠
-create_openbox_config() {
-    local config_dir="$HOME/.config/openbox"
-    local config_file="$config_dir/rc.xml"
-    local backup_file="$config_dir/rc.xml.backup"
-    
-    # 创建配置目录
-    mkdir -p "$config_dir"
-    
-    # 检查配置文件是否存在
-    if [ -f "$config_file" ]; then
-        echo "检测到已存在的Openbox配置文件"
-        
-        # 检查是否已包含电源键配置
-        if grep -q "XF86PowerOff" "$config_file" || grep -q "XF86Sleep" "$config_file"; then
-            echo "配置文件已包含电源键设置，跳过创建"
-            return 0
-        fi
-        
-        # 备份原配置文件
-        echo "备份原配置文件到: $backup_file"
-        cp "$config_file" "$backup_file"
-        
-        # 检查是否有<keyboard>标签
-        if grep -q "<keyboard>" "$config_file"; then
-            echo "在现有配置中添加电源键设置..."
-            # 在<keyboard>标签后添加电源键配置
-            sed -i '/<keyboard>/a\    <keybind key="XF86PowerOff">\n      <action name="Execute">\n        <command>systemctl suspend</command>\n      </action>\n    </keybind>\n    <keybind key="XF86Sleep">\n      <action name="Execute">\n        <command>systemctl suspend</command>\n      </action>\n    </keybind>' "$config_file"
-            echo "电源键配置已添加到现有文件"
-        else
-            echo "现有配置中没有<keyboard>标签，创建新配置..."
-            # 创建包含电源键配置的新文件
-            cat > "$config_file" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<openbox_config xmlns="http://openbox.org/3.4/rc">
-  <keyboard>
-    <keybind key="XF86PowerOff">
-      <action name="Execute">
-        <command>systemctl suspend</command>
-      </action>
-    </keybind>
-    <keybind key="XF86Sleep">
-      <action name="Execute">
-        <command>systemctl suspend</command>
-      </action>
-    </keybind>
-  </keyboard>
-</openbox_config>
-EOF
-            echo "新配置文件已创建"
-        fi
-    else
-        echo "创建新的Openbox配置文件..."
-        # 创建Openbox配置文件
-        cat > "$config_file" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<openbox_config xmlns="http://openbox.org/3.4/rc">
-  <keyboard>
-    <keybind key="XF86PowerOff">
-      <action name="Execute">
-        <command>systemctl suspend</command>
-      </action>
-    </keybind>
-    <keybind key="XF86Sleep">
-      <action name="Execute">
-        <command>systemctl suspend</command>
-      </action>
-    </keybind>
-  </keyboard>
-</openbox_config>
-EOF
-        echo "Openbox配置文件已创建：电源键映射为睡眠"
-    fi
-}
-
-# 新增功能2：旋转触摸坐标90度
+# 旋转触摸坐标90度
 rotate_touch_coordinates() {
-    # 查找所有触摸屏设备
-    local touch_devices=$(xinput list --name-only | grep -i touch)
+    local primary_screen="$1"
+    echo "开始配置触摸屏旋转..."
     
-    if [ -z "$touch_devices" ]; then
-        echo "未检测到触摸屏设备"
-        return 1
-    fi
+    #local touch_device_name="Goodix Capacitive TouchScreen"
+    local search_patterns=("TouchScreen" "Touchscreen" "touchscreen" "Touch" "touch" "Goodix" "goodix")
     
-    echo "检测到触摸屏设备："
-    echo "$touch_devices"
-    
-    # 对每个触摸屏设备应用90度旋转
-    echo "$touch_devices" | while read -r device; do
-        if [ -n "$device" ]; then
-            echo "旋转触摸屏 '$device' 90度..."
-            xinput set-prop "$device" 'Coordinate Transformation Matrix' 0 -1 1 1 0 0 0 0 1
-            if [ $? -eq 0 ]; then
-                echo "  ✓ '$device' 旋转成功"
-            else
-                echo "  ✗ '$device' 旋转失败"
+    # 找到第一个满足search_patterns的device_id
+    local device_id=""
+        
+    # 遍历搜索模式，找到第一个匹配的触摸设备
+    for pattern in "${search_patterns[@]}"; do
+        # 获取匹配的设备名称
+        local matched_device=$(xinput list --name-only | grep -i "$pattern" | head -n1)
+        
+        if [ -n "$matched_device" ]; then
+            echo "找到匹配设备: '$matched_device' (模式: $pattern)"
+            # 获取设备ID
+            device_id=$(xinput list --id-only "$matched_device" 2>/dev/null)
+            
+            if [ -n "$device_id" ]; then
+                echo "设备ID: $device_id"
+                # 设置触摸设备名称变量，供后续使用
+                touch_device_name="$matched_device"
+                break
             fi
         fi
     done
+    
+    if [ -n "$device_id" ]; then
+        echo "找到设备ID: $device_id"
+        echo "映射触摸屏到主屏幕: $primary_screen"
+        xinput map-to-output "$device_id" "$primary_screen" 2>/dev/null && echo "✓ 屏幕映射成功" || echo "✗ 屏幕映射失败"
+    else
+        echo "未找到有效的设备ID，继续执行备用方法..."
+    fi
 }
 
-# 新增功能3：隐藏鼠标光标
+# 隐藏鼠标光标
 hide_mouse_cursor() {
     # 方法1：使用unclutter隐藏鼠标
     if command -v unclutter &> /dev/null; then
         echo "使用unclutter隐藏鼠标光标..."
+        # 先杀掉可能存在的unclutter进程
+        killall unclutter 2>/dev/null || true
         unclutter -idle 0.1 -root &
-        echo "unclutter进程已启动"
+        echo "unclutter进程已启动 (PID: $!)"
         return 0
     fi
     
@@ -227,19 +166,15 @@ done
 echo ""
 echo "=== 新增功能配置 ==="
 
-# 1. 创建Openbox配置文件（电源键改为睡眠）
-echo "1. 配置Openbox电源键事件..."
-create_openbox_config
-
-# 2. 旋转触摸坐标90度
+# 1. 旋转触摸坐标90度
 echo ""
-echo "2. 配置触摸屏旋转..."
-rotate_touch_coordinates
+echo "1. 配置触摸屏旋转..."
+rotate_touch_coordinates "$INTERNAL"
 
-# 3. 隐藏鼠标光标
+# 2. 隐藏鼠标光标
 echo ""
-echo "3. 隐藏鼠标光标..."
-hide_mouse_cursor
+echo "2. 隐藏鼠标光标..."
+# hide_mouse_cursor
 
 # 直接启动 Steam 全屏模式
 echo ""
