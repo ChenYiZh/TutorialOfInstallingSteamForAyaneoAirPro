@@ -1,0 +1,137 @@
+﻿#!/bin/bash
+# Steam Only Session with Display Replication
+# 精确匹配：eDP 和 eDP-1 为内置，其他所有已连接且不是内置的为外置
+
+# 关闭 KDE 相关服务
+export KDE_FULL_SESSION=false
+export KDE_SESSION_VERSION=0
+
+# 获取显示器名称
+INTERNAL=""
+EXTERNAL=""
+
+# 日志配置
+LOG_DIR="/tmp"
+LOG_FILE="${LOG_DIR}/steam-session-$(date +'%Y%m%d-%H%M%S').log"
+
+# 日志函数：同时输出到终端和日志文件
+log() {
+    local message="$1"
+    timestamp=$(date +'%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] $message" | tee -a "$LOG_FILE"
+}
+
+# 函数：检测内置屏幕（精确匹配 eDP 和 eDP-1）
+detect_internal_display() {
+    # 先检查是否有 eDP 或 eDP-1 连接
+    for internal in "eDP" "eDP-1"; do
+        if xrandr --current | grep "$internal connected"; then
+            INTERNAL="$internal"
+            return 0
+        fi
+    done
+}
+
+# 函数：检测第一个可用的外置屏幕
+# 规则：所有已连接且不是内置屏幕的显示器
+detect_external_display() {
+    # 如果没有内置屏幕，则第一个连接的显示器就是主屏
+    if [ -z "$INTERNAL" ]; then
+        INTERNAL="$(xrandr --current | grep " connected" | head -n1 | cut -d' ' -f1)"
+    fi
+
+    # 列出所有已连接且不是内置屏幕的显示器，取第一个
+    while read -r line; do
+        display=$(echo "$line" | cut -d' ' -f1)
+        if [ "$display" != "$INTERNAL" ]; then
+            EXTERNAL="$display"
+            return 0
+        fi
+    done < <(xrandr --current | grep " connected")
+}
+
+# 配置显示器
+set_displays(){
+    # 配置显示器
+    if [ -n "$INTERNAL" ]; then
+        # 先启动内置屏幕
+        log "启用内置屏幕 $INTERNAL 为 1920x1080..."
+        xrandr --output "$INTERNAL" --primary --mode 1080x1920 --pos 0x0 --rotate left
+
+        if [ -n "$EXTERNAL" ]; then
+            log "检测到外置屏幕 $EXTERNAL，设置为复制模式..."
+            # 设置外置屏幕复制内置屏幕
+            xrandr --output "$EXTERNAL" --mode 1920x1080 --rotate normal --pos 0x0
+            log "复制模式已应用：$INTERNAL ←→ $EXTERNAL"
+        else
+            log "仅使用内置屏幕"
+        fi
+    elif [ -n "$EXTERNAL" ]; then
+        log "仅检测到外置屏幕 $EXTERNAL，使用单屏模式..."
+        xrandr --output "$EXTERNAL" --mode 1920x1080 --primary --rotate normal --pos 0x0
+    else
+        log "错误：未检测到任何显示器！"
+        exit 1
+    fi
+}
+
+# 输出当前显示配置
+log_displays(){
+    xrandr --current | grep -E " connected|\*" | while read -r line; do
+        if echo "$line" | grep -q "connected"; then
+            log "$line"
+        else
+            log "   └─ $line"
+        fi
+    done
+}
+
+# 旋转触摸坐标90度
+rotate_touch_coordinates() {
+    log "开始配置触摸屏旋转..."
+    # 获取第一个匹配的 slave pointer 触摸设备 ID
+    local touch_id
+    touch_id=$(xinput list | grep -i -E "touchscreen|touch|goodix" | grep "slave.*pointer" | sed -n 's/.*id=\([0-9]*\).*/\1/p' | head -1)
+    log "触摸设备 ID: $touch_id"
+    if xinput map-to-output "$touch_id" "$INTERNAL" 2>/dev/null; then
+        log "✓ 屏幕映射成功"
+    else
+        log "✗ 屏幕映射失败"
+    fi
+    log "触摸屏配置完成"
+}
+
+# 主程序开始
+log "=== Steam Only Session 启动 ==="
+log "日志文件: $LOG_FILE"
+
+# 检测屏幕
+detect_internal_display
+detect_external_display
+log "检测到内置屏幕: ${INTERNAL:-无}"
+log "检测到外置屏幕: ${EXTERNAL:-无}"
+
+# 配置显示器
+set_displays
+log_displays
+
+# 旋转屏幕
+rotate_touch_coordinates
+
+log "隐藏鼠标光标..."
+unclutter -idle 1 &
+
+log "启动 Openbox 窗口管理器..."
+openbox --replace &
+
+log "启动 Steam 全屏模式..."
+steam -fullscreen -bigpicture -dev
+
+# 清理 Openbox 进程
+killall openbox 2>/dev/null
+
+# 清理 unclutter 进程
+killall unclutter 2>/dev/null
+
+# 当 Steam 退出时，结束会话
+exit 0

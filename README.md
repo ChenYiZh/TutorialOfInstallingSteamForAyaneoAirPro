@@ -145,14 +145,15 @@ sudo apt-get install -f  # 修复依赖关系
 **第一步：环境配置**
 - 安装 Openbox 窗口管理器
 ```
-sudo apt install openbox
+sudo apt install openbox xinput unclutter
 ```
 - 电源键事件改为睡眠
-1. 编辑配置文件：
+##### 1. 编辑配置文件：
 ```
 sudo nano /etc/systemd/logind.conf
 ```
-2. 找到或添加下面这行，确保 # 注释符号已被移除，并将值改为 suspend：
+
+##### 2. 找到或添加下面这行，确保 # 注释符号已被移除，并将值改为 suspend：
 ```
 HandlePowerKey=suspend
 ```
@@ -171,246 +172,132 @@ sudo nano /usr/local/bin/steam-session
 export KDE_FULL_SESSION=false
 export KDE_SESSION_VERSION=0
 
+# 获取显示器名称
+INTERNAL=""
+EXTERNAL=""
+
+# 日志配置
+LOG_DIR="/tmp"
+LOG_FILE="${LOG_DIR}/steam-session-$(date +'%Y%m%d-%H%M%S').log"
+
+# 日志函数：同时输出到终端和日志文件
+log() {
+    local message="$1"
+    timestamp=$(date +'%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] $message" | tee -a "$LOG_FILE"
+}
+
 # 函数：检测内置屏幕（精确匹配 eDP 和 eDP-1）
 detect_internal_display() {
     # 先检查是否有 eDP 或 eDP-1 连接
     for internal in "eDP" "eDP-1"; do
-        if xrandr --current | grep -q "^$internal connected"; then
-            echo "$internal"
+        if xrandr --current | grep "$internal connected"; then
+            INTERNAL="$internal"
             return 0
         fi
     done
-    echo ""
 }
 
 # 函数：检测第一个可用的外置屏幕
 # 规则：所有已连接且不是内置屏幕的显示器
 detect_external_display() {
-    local internal="$1"
-    
     # 如果没有内置屏幕，则第一个连接的显示器就是主屏
-    if [ -z "$internal" ]; then
-        xrandr --current | grep " connected" | head -n1 | cut -d' ' -f1
-        return 0
+    if [ -z "$INTERNAL" ]; then
+        INTERNAL="$(xrandr --current | grep " connected" | head -n1 | cut -d' ' -f1)"
     fi
-    
+
     # 列出所有已连接且不是内置屏幕的显示器，取第一个
-    xrandr --current | grep " connected" | while read -r line; do
+    while read -r line; do
         display=$(echo "$line" | cut -d' ' -f1)
-        if [ "$display" != "$internal" ]; then
-            echo "$display"
+        if [ "$display" != "$INTERNAL" ]; then
+            EXTERNAL="$display"
             return 0
         fi
+    done < <(xrandr --current | grep " connected")
+}
+
+# 配置显示器
+set_displays(){
+    # 配置显示器
+    if [ -n "$INTERNAL" ]; then
+        # 先启动内置屏幕
+        log "启用内置屏幕 $INTERNAL 为 1920x1080..."
+        xrandr --output "$INTERNAL" --primary --mode 1080x1920 --pos 0x0 --rotate left
+
+        if [ -n "$EXTERNAL" ]; then
+            log "检测到外置屏幕 $EXTERNAL，设置为复制模式..."
+            # 设置外置屏幕复制内置屏幕
+            xrandr --output "$EXTERNAL" --mode 1920x1080 --rotate normal --pos 0x0
+            log "复制模式已应用：$INTERNAL ←→ $EXTERNAL"
+        else
+            log "仅使用内置屏幕"
+        fi
+    elif [ -n "$EXTERNAL" ]; then
+        log "仅检测到外置屏幕 $EXTERNAL，使用单屏模式..."
+        xrandr --output "$EXTERNAL" --mode 1920x1080 --primary --rotate normal --pos 0x0
+    else
+        log "错误：未检测到任何显示器！"
+        exit 1
+    fi
+}
+
+# 输出当前显示配置
+log_displays(){
+    xrandr --current | grep -E " connected|\*" | while read -r line; do
+        if echo "$line" | grep -q "connected"; then
+            log "$line"
+        else
+            log "   └─ $line"
+        fi
     done
-    echo ""
 }
 
 # 旋转触摸坐标90度
 rotate_touch_coordinates() {
-    echo "开始配置触摸屏旋转..."
-    
-    # 方法1：直接使用已知的设备名称
-    local touch_device_name="Goodix Capacitive TouchScreen"
-    echo "尝试直接配置设备: '$touch_device_name'"
-    
-    # 获取设备ID
-    local device_id=$(xinput list --id-only "$touch_device_name" 2>/dev/null)
-    
-    if [ -n "$device_id" ]; then
-        echo "找到设备ID: $device_id"
-        echo "应用90度旋转矩阵..."
-        
-        # 尝试应用坐标变换矩阵
-        # 矩阵说明: [a b c]  [d e f]  [g h i]
-        # 对于90度旋转: [0 -1 1] [1 0 0] [0 0 1]
-        
-        if xinput set-prop "$device_id" 'Coordinate Transformation Matrix' 0 -1 1 1 0 0 0 0 1; then
-            echo "✓ 触摸屏旋转成功"
-            
-            # 验证设置
-            echo "当前矩阵设置:"
-            xinput list-props "$device_id" | grep -i "transformation" || true
-            
-            # 额外：尝试屏幕映射
-            local primary_screen=$(xrandr --current | grep " connected primary" | head -n1 | cut -d' ' -f1)
-            if [ -n "$primary_screen" ]; then
-                echo "映射触摸屏到主屏幕: $primary_screen"
-                xinput map-to-output "$device_id" "$primary_screen" 2>/dev/null && echo "✓ 屏幕映射成功" || echo "✗ 屏幕映射失败"
-            fi
-        else
-            echo "✗ 旋转失败，尝试其他属性名..."
-            
-            # 尝试其他可能的属性名
-            for prop in "Coordinate Transformation Matrix" "Transformation Matrix" "libinput Calibration Matrix" "Calibration Matrix"; do
-                echo "尝试属性: $prop"
-                if xinput set-prop "$device_id" "$prop" 0 -1 1 1 0 0 0 0 1 2>/dev/null; then
-                    echo "✓ 使用属性 '$prop' 成功"
-                    break
-                fi
-            done
-        fi
+    log "开始配置触摸屏旋转..."
+    # 获取第一个匹配的 slave pointer 触摸设备 ID
+    local touch_id
+    touch_id=$(xinput list | grep -i -E "touchscreen|touch|goodix" | grep "slave.*pointer" | sed -n 's/.*id=\([0-9]*\).*/\1/p' | head -1)
+    log "触摸设备 ID: $touch_id"
+    if xinput map-to-output "$touch_id" "$INTERNAL" 2>/dev/null; then
+        log "✓ 屏幕映射成功"
     else
-        echo "未找到设备 '$touch_device_name'，尝试搜索其他触摸设备..."
-        
-        # 方法2：搜索所有可能的触摸设备
-        local search_patterns=("TouchScreen" "Touchscreen" "touchscreen" "Touch" "touch" "Goodix" "goodix")
-        
-        for pattern in "${search_patterns[@]}"; do
-            echo "搜索模式: $pattern"
-            local devices=$(xinput list --name-only | grep -i "$pattern" || true)
-            
-            if [ -n "$devices" ]; then
-                echo "找到设备:"
-                echo "$devices"
-                
-                echo "$devices" | while read -r device; do
-                    if [ -n "$device" ]; then
-                        local dev_id=$(xinput list --id-only "$device" 2>/dev/null)
-                        if [ -n "$dev_id" ]; then
-                            echo "配置设备: '$device' (ID: $dev_id)"
-                            if xinput set-prop "$dev_id" 'Coordinate Transformation Matrix' 0 -1 1 1 0 0 0 0 1 2>/dev/null; then
-                                echo "✓ '$device' 旋转成功"
-                            else
-                                echo "✗ '$device' 旋转失败"
-                            fi
-                        fi
-                    fi
-                done
-            fi
-        done
+        log "✗ 屏幕映射失败"
     fi
-    
-    echo "触摸屏配置完成"
-    
-    # 方法3：使用event设备直接配置（备用方法）
-    echo ""
-    echo "尝试通过event设备配置..."
-    
-    # 查找所有event设备中的触摸设备
-    for event_dev in /sys/class/input/event*; do
-        if [ -d "$event_dev/device" ]; then
-            local device_name=$(cat "$event_dev/device/name" 2>/dev/null || echo "")
-            if echo "$device_name" | grep -qi "touch\|goodix"; then
-                echo "找到event设备: $device_name"
-                local event_num=$(basename "$event_dev" | sed 's/event//')
-                echo "Event编号: $event_num"
-                
-                # 这里可以添加通过event设备配置的逻辑
-                # 但通常xinput是更好的方法
-            fi
-        fi
-    done
+    log "触摸屏配置完成"
 }
 
-# 隐藏鼠标光标
-hide_mouse_cursor() {
-    # 方法1：使用unclutter隐藏鼠标
-    if command -v unclutter &> /dev/null; then
-        echo "使用unclutter隐藏鼠标光标..."
-        # 先杀掉可能存在的unclutter进程
-        killall unclutter 2>/dev/null || true
-        unclutter -idle 0.1 -root &
-        echo "unclutter进程已启动 (PID: $!)"
-        return 0
-    fi
-    
-    # 方法2：使用xdotool隐藏鼠标
-    if command -v xdotool &> /dev/null; then
-        echo "使用xdotool隐藏鼠标光标..."
-        xdotool mousemove 10000 10000
-        echo "鼠标已移动到屏幕外"
-        return 0
-    fi
-    
-    # 方法3：使用xsetroot设置透明光标
-    if command -v xsetroot &> /dev/null; then
-        echo "使用xsetroot设置透明光标..."
-        xsetroot -cursor_name left_ptr -cursor /dev/null
-        echo "透明光标已设置"
-        return 0
-    fi
-    
-    echo "警告：未找到隐藏鼠标的工具（unclutter/xdotool/xsetroot）"
-    return 1
-}
+# 主程序开始
+log "=== Steam Only Session 启动 ==="
+log "日志文件: $LOG_FILE"
 
-echo "正在配置显示器..."
-
-# 获取显示器名称
-INTERNAL=$(detect_internal_display)
-EXTERNAL=$(detect_external_display "$INTERNAL")
-
-echo "检测到内置屏幕: ${INTERNAL:-无}"
-echo "检测到外置屏幕: ${EXTERNAL:-无}"
-
-# 先关闭所有显示器，避免配置冲突
-echo "重置所有显示器..."
-xrandr --listmonitors 2>/dev/null | grep -oP '\S+(?=\s+[0-9]+)' | while read -r mon; do
-    echo "关闭显示器: $mon"
-    xrandr --output "$mon" --off 2>/dev/null
-done
-
-# sleep 1
+# 检测屏幕
+detect_internal_display
+detect_external_display
+log "检测到内置屏幕: ${INTERNAL:-无}"
+log "检测到外置屏幕: ${EXTERNAL:-无}"
 
 # 配置显示器
-if [ -n "$INTERNAL" ]; then
-    # 先启动内置屏幕
-    echo "启用内置屏幕 $INTERNAL 为 1920x1080..."
-    xrandr --output "$INTERNAL" --primary --mode 1080x1920 --pos 0x0 --rotate left
-    
-    if [ -n "$EXTERNAL" ]; then
-        echo "检测到外置屏幕 $EXTERNAL，设置为复制模式..."
-        # 设置外置屏幕复制内置屏幕
-        xrandr --output "$EXTERNAL" --mode 1920x1080 --rotate normal --pos 0x0
-        echo "复制模式已应用：$INTERNAL ←→ $EXTERNAL"
-    else
-        echo "仅使用内置屏幕"
-    fi
-elif [ -n "$EXTERNAL" ]; then
-    echo "仅检测到外置屏幕 $EXTERNAL，使用单屏模式..."
-    xrandr --output "$EXTERNAL" --mode 1920x1080 --primary
-else
-    echo "错误：未检测到任何显示器！"
-    exit 1
-fi
+set_displays
+log_displays
 
-# 显示最终配置
-echo ""
-echo "当前显示配置："
-xrandr --current | grep -E " connected|\*" | while read -r line; do
-    if echo "$line" | grep -q "connected"; then
-        echo "$line"
-    else
-        echo "   └─ $line"
-    fi
-done
-
-# 新增功能执行部分
-echo ""
-echo "=== 新增功能配置 ==="
-
-# 1. 旋转触摸坐标90度
-echo ""
-echo "1. 配置触摸屏旋转..."
+# 旋转屏幕
 rotate_touch_coordinates
 
-# 2. 隐藏鼠标光标
-echo ""
-echo "2. 隐藏鼠标光标..."
-hide_mouse_cursor
+log "隐藏鼠标光标..."
+unclutter -idle 1 &
 
-# 直接启动 Steam 全屏模式
-echo ""
-echo "启动 Openbox 窗口管理器..."
+log "启动 Openbox 窗口管理器..."
 openbox --replace &
 
-# sleep 1
-
-echo "启动 Steam 全屏模式..."
+log "启动 Steam 全屏模式..."
 steam -fullscreen -bigpicture -dev
 
 # 清理 Openbox 进程
 killall openbox 2>/dev/null
+
+# 清理 unclutter 进程
+killall unclutter 2>/dev/null
 
 # 当 Steam 退出时，结束会话
 exit 0
